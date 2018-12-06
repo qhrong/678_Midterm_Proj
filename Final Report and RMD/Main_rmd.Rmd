@@ -1,0 +1,741 @@
+---
+title: "678 Midterm Project Main"
+author: "Qianhui Rong"
+date: "11/12/2018"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r,warning=FALSE}
+#Library
+library(MASS)
+library(dplyr)
+library(magrittr)
+library(ggplot2)
+library(cluster)
+library(gridExtra)
+library(lme4)
+library(party)
+library(arm)
+library(MLmetrics)
+library(logistf)
+library(brglm)
+library(merTools)
+```
+
+```{r}
+#Load data 
+data_whole <- read.table(file = 'content_train.tsv', sep = '\t', header = TRUE)
+#Add two columns: total_spend and total_no
+data_whole%<>% mutate(total_spend=express.total.spend+metro.total.spend+
+                      superstore.total.spend+extra.total.spend+fandf.total.spend+
+                       petrol.total.spend+direct.total.spend)
+data_whole%<>% mutate(total_no=express.no.transactions+metro.no.transactions+
+                    superstore.no.transactions+extra.no.transactions+
+                      fandf.no.transactions+
+                      petrol.no.transactions+direct.no.transactions)
+#Seperate the data into train set and test set (80:20 split)
+#Random generate 100000*0.2 test set
+set.seed(2018)
+test_index <-  sort(sample(nrow(data_whole), nrow(data_whole)*.2))
+data_test <- data_whole[test_index,]
+data_train <- data_whole[-test_index,]
+```
+
+
+#A. Abstract
+
+This analysis project is conducted based on the Tesco purchase history data. The goal is to build an appropriate model to predict the advertisements' click-through-rate for each of the customers in Tesco's database. This has been done with multinomial model, logistic model and multilevel mixed effect model. A problem named "seperation problem" or "rare event problem" has arose during modeling process. Some methods have been used to tackle this problem, but their performance is not up to the expectation, which leaves a wide exploring space for future analysis on this data. 
+
+
+#B. Introduction
+
+Click-through_rate(CTR) is the percentage rate at which people click on a particular ad when online. A critical step to improve CTR is to target the right group of customers for each kind of advertisement. Therefore, exploring the relation between features of customers (for example, demographic characteristics and purchase preferences) and whether they have clicked through this advertisement is important.
+The most common and efficient method is logistic regression, predicting the probability of a certain group of people clicking a link. Also, there are some machine learning methods popular for this problem: Gradient Boosting Decision Tree, Factorization Mechines, etc.
+
+
+#C. Method
+
+##1. Data source
+
+The data is obtained from https://www.kaggle.com/linkonabe/tesco-marketing-content. It's shared by Tesco company, which is a supermarket market leader in the UK. 
+The company releases some marketing content cards each year, and in this dataset, we have 9 of them marked as content_1 to content_9. For each content card, 1 means the customer clicked on the card, 0 means the customer viewed the card but didn’t click, NA means the user was never shown the card.
+The dataset also shares its customers' purchase history in different kinds of shop. There are seven kinds of store: 
+-Tesco Express: neighbourhood convenience shops
+-Tesco Metro: located in city centres beside railway stations
+-Tesco Superstore: standard large supermarkets
+-Tesco Extra: larger, mainly out-of-town hypermarkets
+-Tesco F&F: online store selling Tesco's own clothes brand
+-Tesco Direct: online store selling groceries, homewares, electronics, etc.
+-Tesco Petrol: grocery store in petrol stations
+Some customers' demographic features are also provided in the data: gender and county. Affluency is a more informative variable than county. It's a broad categorisation of how affluent the customer is based on their postcode.
+
+##2. Model used
+
+Models selected to explain the content_1 variable are:
+
+-Multinomial Model: using content_1 without conversion or pre-processing, and keep its three levels(0,1,NA);
+
+For the following two models, preprocessing is necessary. I've first tried out converting NA to 0 and leave 1 as 1, so content_1 becomes "absence of click" vs. "presence of click", but this makes the "seperation" problem more severe(in appendix). Then I switched to eliminating the NA directly in both training set and testing set, in order to make "ones" in content_1 to have a higher proportion, compared to "zeros" in content_1(in main result section).
+-Logistic Model
+-Multilevel Mixed Effect Model
+
+
+#D. Results
+
+##Part I: EDA
+###EDA on Affluency 
+
+About affluency, I'm expecting a higher amount of transactions and a higher number of transactions in regions of higher degree of affluency. 
+
+###1. Total amount of transactions vs. Affluency
+```{r}
+data_train %>% group_by(affluency) %>% 
+  ggplot(aes(x=as.factor(affluency),y=total_spend))+ geom_boxplot()+
+  scale_x_discrete(limits=c("Very Low","Low","Mid","High","Very High"))+
+  xlab("Affluency") +
+  ylab("Total Spend") +
+  coord_flip()+
+  labs(title="Total Spend Amount vs. Affluency",subtitle="No apparent difference in total spend range for each affulency class")
+
+#There are some points located in higher spend amount for Mid class affluency, but these points are trivial to the whole data size.
+
+#Double check if those five bar charts are that close
+#c(236496799/19772,242749658/20133,601268557/50105,60063877/5009,59859247/4981)
+```
+
+###2. Total Number of transactions vs. Affluency
+```{r}
+data_train %>% group_by(affluency) %>% 
+  ggplot(aes(x=as.factor(affluency),y=total_no))+ geom_boxplot()+
+  scale_x_discrete(limits=c("Very Low","Low","Mid","High","Very High"))+
+  xlab("Affluency") +
+  ylab("Total Number of Transactions") +
+  coord_flip()+
+  labs(title="Total Number of Transactions vs. Affluency",subtitle="No apparent difference in number of transactions range for each affulency class")
+```
+
+###3. Clicking in Different Content (1~9) vs. Affluency
+```{r}
+#Group data
+plot_mat <- matrix(0,nrow =45,ncol=3)
+colnames(plot_mat) <- c("Content","Affluency","Count")
+plot_mat[,1] <- c(rep("content_1",5),rep("content_2",5),rep("content_3",5),rep("content_4",5),
+                  rep("content_5",5),rep("content_6",5),rep("content_7",5),rep("content_8",5),
+                  rep("content_9",5))
+plot_mat[,2] <- rep(c("High","Low","Mid","Very High","Very Low"),9)
+
+mat<- matrix(0,nrow = 9,ncol=5)
+for (i in 1:9){
+  vh <- 0
+  h <- 0
+  m <- 0
+  l <- 0
+  vl <- 0
+  vh <- length(which(data_train[which(data_train[,1+i]==1),26]=="Very High")==TRUE)
+  h <- length(which(data_train[which(data_train[,1+i]==1),26]=="High")==TRUE)
+  m <- length(which(data_train[which(data_train[,1+i]==1),26]=="Mid")==TRUE)
+  l <- length(which(data_train[which(data_train[,1+i]==1),26]=="Low")==TRUE)
+  vl <- length(which(data_train[which(data_train[,1+i]==1),26]=="Very Low")==TRUE)
+  mat[i,] <- c(h,l,m,vh,vl)
+}
+mat <- t(mat)
+mat <- as.data.frame(mat)
+rownames(mat) <- c("High","Low","Mid","Very High","Very Low")
+colnames(mat) <- c("1","2","3","4","5","6","7","8","9")
+plot_mat[,3] <- c(mat$`1`,mat$`2`,mat$`3`,mat$`4`,mat$`5`,mat$`6`,mat$`7`,mat$`8`,mat$`9`)
+plot_mat <- as.data.frame(plot_mat)
+
+#Plot
+plot_mat$Count <- as.numeric(plot_mat$Count)
+ggplot(data = plot_mat)+
+  aes(x=as.factor(Content),y=Count,fill=as.factor(Affluency))+
+  geom_col(position = 'stack')+
+  xlab("Content 1 to 9")+
+  scale_fill_discrete(name="Affluency")+
+  labs(title="Count number of clicking each content vs. Affluency",subtitle=paste(strwrap("The most clicked contents are content 7 and content1, and the rest of them don't have an evident difference on count. People from different affluency regions may have some preferences towards certain contents, but hard to make sure on it.", 90), collapse="\n"))
+
+```
+
+
+##EDA on Gender
+
+###1. Total amount of transactions vs. Gender
+```{r}
+data_train %>% group_by(gender) %>% 
+  ggplot(aes(x=as.factor(gender),y=total_spend))+ geom_boxplot()+
+  xlab("Gender") +
+  ylab("Total Spend") +
+  coord_flip()+
+  labs(title="Total Spend Amount vs. Gender",subtitle="No apparent difference in total spend range for each gender")
+```
+
+###2. Total Number of transactions vs. Gender
+```{r}
+data_train %>% group_by(gender) %>% 
+  ggplot(aes(x=as.factor(gender),y=total_no))+ geom_boxplot()+
+  xlab("Gender") +
+  ylab("Total Number of Transactions") +
+  coord_flip()+
+  labs(title="Total Number of Transactions vs. Gender",subtitle="No apparent difference in number of transactions range for each gender")
+```
+
+###3. Clicking in Different Content (1~9) vs. Gender
+```{r}
+#Group data
+plot_mat <- matrix(0,nrow =18,ncol=3)
+colnames(plot_mat) <- c("Content","Gender","Count")
+plot_mat[,1] <- c(rep("content_1",2),rep("content_2",2),rep("content_3",2),rep("content_4",2),
+                  rep("content_5",2),rep("content_6",2),rep("content_7",2),rep("content_8",2),
+                  rep("content_9",2))
+plot_mat[,2] <- rep(c("Male","Female"),9)
+
+mat<- matrix(0,nrow = 9,ncol=2)
+for (i in 1:9){
+  f <- 0
+  m <- 0
+  m <- length(which(data_train[which(data_train[,1+i]==1),25]=="Male")==TRUE)
+  f <- length(which(data_train[which(data_train[,1+i]==1),25]=="Female")==TRUE)
+  mat[i,] <- c(m,f)
+}
+mat <- t(mat)
+mat <- as.data.frame(mat)
+rownames(mat) <- c("Male","Female")
+colnames(mat) <- c("1","2","3","4","5","6","7","8","9")
+plot_mat[,3] <- c(mat$`1`,mat$`2`,mat$`3`,mat$`4`,mat$`5`,mat$`6`,mat$`7`,mat$`8`,mat$`9`)
+plot_mat <- as.data.frame(plot_mat)
+
+#Plot
+plot_mat$Count <- as.numeric(plot_mat$Count)
+ggplot(data = plot_mat)+
+  aes(x=as.factor(Content),y=Count,fill=as.factor(Gender))+
+  geom_col(position = 'stack')+
+  xlab("Content 1 to 9")+
+  scale_fill_discrete(name="Gender")+
+  labs(title="Count number of clicking each content vs. Gender", subtitle=paste(strwrap("Certain contents are male dominant(5,9) but most of them are female dominant(1,2,3,7). We can expect contents have gender-featured.", 90), collapse="\n"))
+```
+
+
+##EDA on Contents(Clicked/Ignored/Not Informed)
+```{r}
+#Calculate the number of click for each customer
+for (i in 1:80000){data_train[i,30]<- sum(as.numeric(data_train[i,2:10]),na.rm = TRUE)}
+colnames(data_train)[30] <- "No_Click"
+```
+
+###1. Plot of amount of transactions and contents
+```{r}
+#Maximum number of clicks for a customer is two, and minimun number of clicks for a customer is zero. 
+ggplot(data=data_train)+
+  aes(x=as.factor(No_Click),y=total_spend,fill=as.factor(No_Click))+
+  geom_point(alpha=0.1)+
+  geom_boxplot()+
+  xlab("Number of Clicks")+
+  ylab("Total Spend")+
+  labs(title="Total Spend Amount vs. Number of Clicks",subtitle="No apparent difference in total spend amount range for class of number of clicks")+
+  guides(fill=guide_legend(title="Number of Clicks"))
+```
+
+###2. Plot of number of transactions and contents
+```{r}
+ggplot(data=data_train)+
+  aes(x=as.factor(No_Click),y=total_no,fill=as.factor(No_Click))+
+  geom_point(alpha=0.1)+
+  geom_boxplot()+
+  xlab("Number of Clicks")+
+  ylab("Number of Transactions")+
+  labs(title="Number of Transactions vs. Number of Clicks",subtitle="No apparent difference in number of transactions range for class of number of clicks")+
+  guides(fill=guide_legend(title="Number of Clicks"))
+```
+
+
+##Part II: Modeling
+
+In this Modeling section, I'll use the data deleted content_1=NA observations. 
+
+###i. Multinomial Model for Contents 
+The content_1 is orginally a three-level response variable, and the first relevant model that came to my mind is multinomial model.
+
+I fit a multinomial model taking content one's clicking history (0, 1, NA: three levels) as response variable. In this case, the three possible responses are: not informed(NA) / informed but didn't click(0) / clicked(1) have an order.
+To avoid problems, convert "NA" to "0", "0" to "1", "1" to "2". "0" means the customers are not informed, "1" means the customers didn't clicked, "2" means the customers have clicked.
+
+```{r}
+for (i in 1:9){
+data_train[,1+i]<-  ifelse(is.na(data_train[,1+i])==TRUE,0,
+                                ifelse(data_train[,1+i]=="0",1,
+                                       ifelse(data_train[,1+i]=="1",2,NA)))
+data_train[,1+i] <- as.factor(data_train[,1+i])
+}
+
+#Proceed the same value modification for test data
+for (i in 1:9){
+data_test[,1+i]<-  ifelse(is.na(data_test[,1+i])==TRUE,0,
+                                ifelse(data_test[,1+i]=="0",1,
+                                       ifelse(data_test[,1+i]=="1",2,NA)))
+data_test[,1+i] <- as.factor(data_test[,1+i])
+}
+```
+
+```{r}
+#Model Fitting
+ord_logit <- polr(content_1~as.factor(gender)+as.factor(affluency)+log(express.total.spend+1)+log(express.no.transactions+1)+log(metro.total.spend+1)+log(metro.no.transactions+1)+log(superstore.total.spend+1)+log(superstore.no.transactions+1)+log(extra.total.spend+1)+log(extra.no.transactions+1)+log(fandf.total.spend+1)+log(fandf.no.transactions+1)+log(petrol.total.spend+1)+log(petrol.no.transactions+1)+log(direct.total.spend+1)+log(direct.no.transactions+1),data=data_train,Hess = T)
+summary(ord_logit)
+
+#Residual Plots
+resid_multinom <- model.matrix(~factor(content_1)-1, data=data_train)-fitted(ord_logit)
+par(mfrow= c(2,2)) 
+for (i in 1:3) {
+binnedplot(fitted(ord_logit)[,i], resid_multinom[,i], cex.main=1.3, main="Binned residual plot", nclass = 20) }
+
+#LogLoss
+LogLoss(y_pred=ord_logit$fitted.values, y_true=as.numeric(data_train$content_1)) 
+
+#Predict the test data
+data_test[,-c(1:10,28,29)] -> data_test_multinom
+predict_multinom_prob <- predict(ord_logit, newdata = data_test_multinom, "probs")
+predict_multinom_class <- predict(ord_logit, newdata = data_test_multinom)
+#Calculate the probability of mis-prediction
+mean(as.character(predict_multinom_class) != as.character(data_test$content_1))
+```
+
+For this multinomial model:
+1. The residual plots for three levels look acceptable, with most of the points located between two curves.
+2. Prediction based on this model is a little bit better than random guess, about 55% of successful prediction rate. But the problem is that the model automatically take all predictions equal to 0.
+
+
+To simplify the problem, I then narrow the response's three levels to two levels by deleting NA observations in order to increase the ones proportion compared to the zeros.
+"0" means the customers didn't clicked, "1" means the customers have clicked.
+
+```{r}
+#Reload original data
+data_whole <- read.table(file = 'content_train.tsv', sep = '\t', header = TRUE)
+data_whole%<>% mutate(total_spend=express.total.spend+metro.total.spend+
+                      superstore.total.spend+extra.total.spend+fandf.total.spend+
+                       petrol.total.spend+direct.total.spend)
+data_whole%<>% mutate(total_no=express.no.transactions+metro.no.transactions+
+                    superstore.no.transactions+extra.no.transactions+
+                      fandf.no.transactions+
+                      petrol.no.transactions+direct.no.transactions)
+set.seed(2018)
+test_index <-  sort(sample(nrow(data_whole), nrow(data_whole)*.2))
+data_test <- data_whole[test_index,]
+data_train <- data_whole[-test_index,]
+
+#Preprocessing the data: deleting all NA observations
+data_train_nona <- data_train %>% 
+  filter(is.na(content_1)==FALSE)
+
+data_test_nona <- data_test %>% 
+  filter(is.na(content_1)==FALSE)
+
+data_train_nona$content_1 <- as.factor(data_train_nona$content_1)
+
+nrow(subset(data_train_nona,data_train_nona$content_1=="0"))
+nrow(subset(data_train_nona,data_train_nona$content_1=="1"))
+
+#Now for content 1, there are 36450 ones and 399 twos.
+```
+
+###ii. Logistic Model
+```{r}
+simp_logit <- glm(content_1~as.factor(gender)+as.factor(affluency)+log(express.total.spend+1)+log(express.no.transactions+1)+log(metro.total.spend+1)+log(metro.no.transactions+1)+log(superstore.total.spend+1)+log(superstore.no.transactions+1)+log(extra.total.spend+1)+log(extra.no.transactions+1)+log(fandf.total.spend+1)+log(fandf.no.transactions+1)+log(petrol.total.spend+1)+log(petrol.no.transactions+1)+log(direct.total.spend+1)+log(direct.no.transactions+1),data=data_train_nona,family = binomial)
+summary(simp_logit)
+
+#Evaluate the model
+#Anova test to show if adding each variable makes sense
+anova(simp_logit)
+
+#LogLoss to see the difference between fitted values and actual values
+LogLoss(y_pred=simp_logit$fitted.values, y_true=as.numeric(data_train_nona$content_1)) 
+
+#Binned residual plot
+binnedplot(x=simp_logit$fitted.values,y=resid(simp_logit,type="response"),nclass = 30)
+
+#Error table
+T_A <- mean(simp_logit$fitted.values<0.5 & data_train_nona$content_1==0)
+T_B <- mean(simp_logit$fitted.values>0.5 & data_train_nona$content_1==0)
+T_C <- mean(simp_logit$fitted.values<0.5 & data_train_nona$content_1==1)
+T_D <- mean(simp_logit$fitted.values>0.5 & data_train_nona$content_1==1)
+error_table <- matrix(c(T_A,T_B,T_C,T_D),byrow=TRUE,nrow = 2) 
+rownames(error_table) <- c("y=0","y=1")
+colnames(error_table) <- c("y_hat=0","y_hat=1")
+error_table
+
+#Predictions
+data_test[,-c(1:10,28,29)] %>% filter(is.na(data_test$content_1)==FALSE)-> data_test_glm
+predict_glm_class <- predict(simp_logit, newdata = data_test_glm)
+probs_glm <- exp(predict_glm_class)/(1+exp(predict_glm_class)) #probability of 1
+data_test_use <- data_test %>% filter(is.na(data_test$content_1)==FALSE)
+ggplot(data_test_use)+
+  aes(x=probs_glm,y=as.factor(data_test_use$content_1))+
+  geom_point()+
+  xlab("Predicted Probability")+ylab("Actual Value")
+```
+
+For this logistic model:
+1. Comapring the null deviance and residual deviance, we can see that the model has been improved by adding new variables.
+2. From the ANOVA test, even though the deviance is not improving drastically, as I added each variable, the deviance does decrease (but of small amount).
+3. LogLoss is a value that we want to minimize signifying that the model is more accurate. The LogLoss in this model is higher than that of multinomial model.
+4. Binned residual plot here looks normal, with all points between lines and symmetrically distributed above and below zero.
+5. The error table is telling a big problem, as the one I've observed from the multinomial model before. The model is having a really high successful prediction rate, 99.5%. Simply because that it is predicting all the test observations to be zero, because the original training dataset has only less than 0.05% which has $content_1=1$ The number of customers who have clicked through is really low. I'll deal with this in the next section "Rare event problem".
+6. The prediction plot also illustrate the last problem. We have the predicted probability not higher than 0.02, which we can approximate to a probabilitu of zero, but there are a number of points of one.
+
+
+To deal with logistic regression's "rare event problem":
+We only have 399 "ones" in data_train for content_1, which is relatively rare, about 1%. I'll try two most popular methods to deal with this kind of seperation problem:
+
+####a. brglm: Bias Reduction in Binomial-Response Generalized Linear Models
+```{r}
+brglm_logit <- brglm(content_1~as.factor(gender)+as.factor(affluency)+log(express.total.spend+1)+log(express.no.transactions+1)+log(metro.total.spend+1)+log(metro.no.transactions+1)+log(superstore.total.spend+1)+log(superstore.no.transactions+1)+log(extra.total.spend+1)+log(extra.no.transactions+1)+log(fandf.total.spend+1)+log(fandf.no.transactions+1)+log(petrol.total.spend+1)+log(petrol.no.transactions+1)+log(direct.total.spend+1)+log(direct.no.transactions+1),data=data_train_nona,family = binomial)
+summary(brglm_logit)
+
+#Residual Plot
+binnedplot(x=brglm_logit$fitted.values,y=resid(brglm_logit,type="response"),nclass = 30)
+
+#Error table
+T_A <- mean(fitted(brglm_logit)<0.5 & data_train_nona$content_1==0)
+T_B <- mean(fitted(brglm_logit)>0.5 & data_train_nona$content_1==0)
+T_C <- mean(fitted(brglm_logit)<0.5 & data_train_nona$content_1==1)
+T_D <- mean(fitted(brglm_logit)>0.5 & data_train_nona$content_1==1)
+error_table <- matrix(c(T_A,T_B,T_C,T_D),byrow=TRUE,nrow = 2) 
+rownames(error_table) <- c("y=0","y=1")
+colnames(error_table) <- c("y_hat=0","y_hat=1")
+error_table
+
+#Predictions
+data_test[,-c(1:10,28,29)] %>% filter(is.na(data_test$content_1)==FALSE)-> data_test_glm
+predict_brglm_class <- predict(brglm_logit, newdata = data_test_glm)
+probs_brglm <- exp(predict_brglm_class)/(1+exp(predict_brglm_class)) #probability of 1
+ggplot(data_test_use)+
+  aes(x=probs_brglm,y=data_test_use$content_1)+
+  geom_point()+
+  xlab("Predicted Probability")+ylab("Actual Value")
+```
+
+From this brglm model:
+1. We're seeing similar model outputs in summary, given that I've kept all the same independent variables.
+2. The error table shows similar results and the same problem as before; So does the prediction test.
+3. This model is not a good remedy for our problem in the context.
+
+
+####b. logistf: Firth’s bias-Reduced penalized-likelihood logistic regression
+```{r}
+stf_logit <- logistf(content_1~as.factor(gender)+as.factor(affluency)+log(express.total.spend+1)+log(express.no.transactions+1)+log(metro.total.spend+1)+log(metro.no.transactions+1)+log(superstore.total.spend+1)+log(superstore.no.transactions+1)+log(extra.total.spend+1)+log(extra.no.transactions+1)+log(fandf.total.spend+1)+log(fandf.no.transactions+1)+log(petrol.total.spend+1)+log(petrol.no.transactions+1)+log(direct.total.spend+1)+log(direct.no.transactions+1),data=data_train_nona)
+summary(stf_logit)
+
+#Error table
+T_A <- mean(stf_logit$predict<0.5 & data_train_nona$content_1==0)
+T_B <- mean(stf_logit$predict>0.5 & data_train_nona$content_1==0)
+T_C <- mean(stf_logit$predict<0.5 & data_train_nona$content_1==1)
+T_D <- mean(stf_logit$predict>0.5 & data_train_nona$content_1==1)
+error_table <- matrix(c(T_A,T_B,T_C,T_D),byrow=TRUE,nrow = 2) 
+rownames(error_table) <- c("y=0","y=1")
+colnames(error_table) <- c("y_hat=0","y_hat=1")
+error_table
+
+#Predictions 
+betas <- coef(stf_logit)
+formula <- content_1~as.factor(gender)+as.factor(affluency)+log(express.total.spend+1)+log(express.no.transactions+1)+log(metro.total.spend+1)+log(metro.no.transactions+1)+log(superstore.total.spend+1)+log(superstore.no.transactions+1)+log(extra.total.spend+1)+log(extra.no.transactions+1)+log(fandf.total.spend+1)+log(fandf.no.transactions+1)+log(petrol.total.spend+1)+log(petrol.no.transactions+1)+log(direct.total.spend+1)+log(direct.no.transactions+1)
+data_test_stf <- data_test[,-c(1,3:10,28,29)] %>% filter(is.na(data_test$content_1)==FALSE)
+X <- model.matrix(formula, data=data_test_stf) 
+pi.obs <- 1 / (1 + exp(-X %*% betas)) 
+ggplot(data_test_use)+
+  aes(x=pi.obs,y=data_test_use$content_1)+
+  geom_point()+
+  xlab("Predicted Probability")+ylab("Actual Value")
+```
+
+From this logitstf model:
+1. The error table has the totally opposite result compared to the logistic model, which is not normal.
+2. Prediction plot shows the same conclusion: the predicted probability higher than 0.99 but the majority of actual points are zeros.
+
+In general, these two models designed to tackle seperation problem didn't work out in this context, and I will be open to explore other solutions to this problem.
+
+
+###iii. Multilevel Mixed Effect Model for Contents
+
+It would also make sense to try multilevel mixed effect model. I'll put gender and affluency, the only two factor variables in the data as random effects.
+
+```{r}
+mix_logit <- glmer(content_1~(1|gender)+(1|affluency)+
+                     scale(express.total.spend)+scale(metro.total.spend)+
+                    scale(superstore.total.spend)+scale(extra.total.spend)+
+                    scale(fandf.total.spend)+scale(petrol.total.spend)+
+                    scale(direct.total.spend),
+                   data=data_train_nona,family = binomial,REML=FALSE) 
+summary(mix_logit)
+ranef(mix_logit)
+
+#Residual Plot
+binnedplot(fitted(mix_logit),resid(mix_logit,type = "response"),nclass =30)
+
+#Predictions
+PI <- predictInterval(merMod = mix_logit, newdata = data_test_use,
+                        level = 0.95, 
+                        stat = "median", type="linear.prediction",
+                        include.resid.var = TRUE)
+probs_glmer <- matrix(nrow = 9173,ncol=3) #Transfer value to probability 
+for(i in 1:3){
+probs_glmer[,i] <- exp(PI[,i])/(1+exp(PI[,i])) #probability of 1
+}
+colnames(probs_glmer) <- colnames(PI)
+probs_glmer <- as.data.frame(probs_glmer)
+#Plot only on the first 30 observations 
+ggplot(aes(x=1:30, y=fit, ymin=lwr, ymax=upr), data=probs_glmer[1:30,]) +
+  geom_point() +
+  geom_linerange() +
+  labs(x="Index", y="Prediction w/ 95% PI") + theme_bw()
+#Plot predicted value vs. actual value
+ggplot(data=data_test_use,aes(x=probs_glmer[,1],y=data_test_use$content_1))+
+  geom_point()+
+  xlab("Predicted Probability")+ylab("Actual Value")
+
+#Error table
+T_A <- mean(probs_glmer[,1]<0.5 & data_train_nona$content_1==0)
+T_B <- mean(probs_glmer[,1]>0.5 & data_train_nona$content_1==0)
+T_C <- mean(probs_glmer[,1]<0.5 & data_train_nona$content_1==1)
+T_D <- mean(probs_glmer[,1]>0.5 & data_train_nona$content_1==1)
+error_table <- matrix(c(T_A,T_B,T_C,T_D),byrow=TRUE,nrow = 2) 
+rownames(error_table) <- c("y=0","y=1")
+colnames(error_table) <- c("y_hat=0","y_hat=1")
+error_table
+```
+
+From this multilevel mixed effect model:
+1. The affluency as a random effect doesn't have a high influence on the model, with its random effect coefficients really close to zero. While the gender effect relatively has a large difference.
+2. Binned residual plot of this model looks normal.
+3. The predictions made on test set and the error table seem that it's still suffering the same problem left before, known as "seperation" problem. The three models (multinomial,logistic and multilevel) are showing exactly same results in error table and predictions.
+
+
+#E. Discussion
+
+##i. Implitcation
+
+1. From all the results and the interpretations of the models fitted above, it's not reseasonable to use these models to predict clicking rate; while the models do explain the clicking rate to some extend.
+2. I've also thought of sampling a data of 50% zeros in content_1 and 50% ones in content_1, but this data modification will lose the proportion's information and it doesn't make sense because one of the most important messages conveyed from the data is the proportion of ones in content clicking choice.
+
+##ii. Limitation
+
+1. The "rare event" problem is not resolved in this project, which will constraint the models proceeding predictions.
+2. The data is random simulated by the company with some latent assumptions, which are not disclosed to data users. These assumptions are supposed to be discovered by learning results, but in my project, they have not been identified. This can potentialy be solved when I've learnt more about machine learning.
+
+##iii. Future Directions
+
+1. I may continue on looking for other methods which could resolve the seperation problem in this dataset.
+2. The data's structure or other latent relations may violate the assumptions of regressions I'm applying in the project. Therefore, some other more advanced learning methods may be more appropriate for this data's predicting problem.
+3. After finding a more proper and efficient way to make predictions, I will continue on predicting content_2 to content_9. 
+
+
+# Appendix:
+
+##I. Other EDA Plots 
+
+###1. Total amount of transactions vs. Affluency
+```{r}
+#Group data 
+plot_amt <- data_train %>% 
+  dplyr::select(affluency,express.total.spend,metro.total.spend,                       superstore.total.spend,extra.total.spend,fandf.total.spend,
+                      petrol.total.spend,direct.total.spend) %>% 
+  group_by(affluency) %>% summarise(Express=sum(express.total.spend),
+                                    Metro=sum(metro.total.spend),
+                                    Superstore=sum(superstore.total.spend),
+                                    Extrastore=sum(extra.total.spend),
+                                    Fandf=sum(fandf.total.spend),
+                                    Petrol=sum(petrol.total.spend),
+                                    Direct=sum(direct.total.spend))
+
+plot_mat <- matrix(0,nrow = 35,ncol = 3)
+plot_mat[,1] <- rep(c("High","Low","Mid","Very High","Very Low"),7)
+plot_mat[,2] <- c(rep(x="Express",5),rep(x="Metro",5),
+                  rep(x="Superstore",5),rep(x="Extrastore",5),
+                  rep(x="Fandf",5),rep(x="Petrol",5),rep(x="Direct",5))
+plot_mat[,3] <- rbind(plot_amt$Express,plot_amt$Metro,plot_amt$Superstore,plot_amt$Extrastore,
+                      plot_amt$Fandf,plot_amt$Petrol,plot_amt$Direct)
+plot_mat <- as.data.frame(plot_mat)
+colnames(plot_mat) <- c("Affluency","Store.Type","Total.Amount")
+plot_mat$Total.Amount <- as.numeric(plot_mat$Total.Amount)
+
+#Plot
+g1 <- 
+  ggplot(data = plot_mat)+
+  aes(x=as.factor(Affluency),y=Total.Amount,fill=as.factor(Store.Type))+
+  geom_col(position = 'stack')+
+  scale_x_discrete(limits=c("Very Low","Low","Mid","High","Very High"))+
+  xlab("Affluency")+
+  ylab("Total Amount")+
+  scale_fill_discrete(name="Store Type")
+g2 <- 
+  ggplot(data = plot_mat)+
+  aes(x=as.factor(Affluency),y=Total.Amount,fill=as.factor(Store.Type))+
+  geom_col(stat="identity", position="fill")+
+  scale_x_discrete(limits=c("Very Low","Low","Mid","High","Very High"))+
+  xlab("Affluency")+
+  ylab("Proportion")+
+  scale_fill_discrete(name="Store Type")+
+  coord_flip()
+grid.arrange(g1, g2)
+```
+
+###2. Number of transactions vs. Affluency
+```{r}
+#Group data 
+data_train %>% dplyr::select(affluency,express.no.transactions,metro.no.transactions,
+                    superstore.no.transactions,extra.no.transactions,fandf.no.transactions,
+                       petrol.no.transactions,direct.no.transactions) %>% 
+  group_by(affluency) %>% summarise(Express=sum(express.no.transactions),
+                                    Metro=sum(metro.no.transactions),
+                                    Superstore=sum(superstore.no.transactions),
+                                    Extrastore=sum(extra.no.transactions),
+                                    Fandf=sum(fandf.no.transactions),
+                                    Petrol=sum(petrol.no.transactions),
+                                    Direct=sum(direct.no.transactions))->plot_amt
+
+plot_mat <- matrix(0,nrow = 35,ncol = 3)
+plot_mat[,1] <- rep(c("High","Low","Mid","Very High","Very Low"),7)
+plot_mat[,2] <- c(rep(x="Express",5),rep(x="Metro",5),
+                  rep(x="Superstore",5),rep(x="Extrastore",5),
+                  rep(x="Fandf",5),rep(x="Petrol",5),rep(x="Direct",5))
+plot_mat[,3] <- rbind(plot_amt$Express,plot_amt$Metro,plot_amt$Superstore,plot_amt$Extrastore,
+                      plot_amt$Fandf,plot_amt$Petrol,plot_amt$Direct)
+plot_mat <- as.data.frame(plot_mat)
+colnames(plot_mat) <- c("Affluency","Store.Type","No.Amount")
+plot_mat$No.Amount <- as.numeric(plot_mat$No.Amount)
+
+#Plot
+g1 <- 
+  ggplot(data = plot_mat)+
+  aes(x=as.factor(Affluency),y=No.Amount,fill=as.factor(Store.Type))+
+  geom_col(position = 'stack')+
+  scale_x_discrete(limits=c("Very Low","Low","Mid","High","Very High"))+
+  xlab("Affluency")+
+  ylab("Number of Transactions")+
+  scale_fill_discrete(name="Store Type")+
+  coord_flip()
+g2 <- 
+  ggplot(data = plot_mat)+
+  aes(x=as.factor(Affluency),y=No.Amount,fill=as.factor(Store.Type))+
+  geom_col(stat="identity", position="fill")+
+  scale_x_discrete(limits=c("Very Low","Low","Mid","High","Very High"))+
+  xlab("Affluency")+
+  ylab("Proportion")+
+  scale_fill_discrete(name="Store Type")+
+  coord_flip()
+grid.arrange(g1, g2)
+```
+
+###3. Total amount of transactions vs. Gender
+```{r}
+#Group data 
+data_train %>% dplyr::select(gender,express.total.spend,metro.total.spend,
+                      superstore.total.spend,extra.total.spend,fandf.total.spend,
+                       petrol.total.spend,direct.total.spend) %>% 
+  group_by(gender) %>% summarise(Express=sum(express.total.spend),
+                                    Metro=sum(metro.total.spend),
+                                    Superstore=sum(superstore.total.spend),
+                                    Extrastore=sum(extra.total.spend),
+                                    Fandf=sum(fandf.total.spend),
+                                    Petrol=sum(petrol.total.spend),
+                                    Direct=sum(direct.total.spend))->plot_amt
+
+plot_mat <- matrix(0,nrow = 14,ncol = 3)
+plot_mat[,1] <- rep(c("Male","Female"),7)
+plot_mat[,2] <- c(rep(x="Express",2),rep(x="Metro",2),
+                  rep(x="Superstore",2),rep(x="Extrastore",2),
+                  rep(x="Fandf",2),rep(x="Petrol",2),rep(x="Direct",2))
+plot_mat[,3] <- rbind(plot_amt$Express,plot_amt$Metro,plot_amt$Superstore,plot_amt$Extrastore,
+                      plot_amt$Fandf,plot_amt$Petrol,plot_amt$Direct)
+plot_mat <- as.data.frame(plot_mat)
+colnames(plot_mat) <- c("Gender","Store.Type","Total.Amount")
+plot_mat$Total.Amount <- as.numeric(plot_mat$Total.Amount)
+
+#Plot
+g1 <- 
+  ggplot(data = plot_mat)+
+  aes(x=as.factor(Gender),y=Total.Amount,fill=as.factor(Store.Type))+
+  geom_col(position = 'stack')+
+  xlab("Gender")+
+  ylab("Total Amount")+
+  scale_fill_discrete(name="Store Type")+
+  coord_flip()
+g2 <- 
+  ggplot(data = plot_mat)+
+  aes(x=as.factor(Gender),y=Total.Amount,fill=as.factor(Store.Type))+
+  geom_col(stat="identity", position="fill")+
+  xlab("Gender")+
+  ylab("Proportion")+
+  scale_fill_discrete(name="Store Type")+
+  coord_flip()
+grid.arrange(g1, g2)
+```
+
+###4. Number of transactions vs. Gender
+```{r}
+#Group data 
+data_train %>% select(gender,express.no.transactions,metro.no.transactions,
+                       superstore.no.transactions,extra.no.transactions,fandf.no.transactions,
+                       petrol.no.transactions,direct.no.transactions) %>% 
+  group_by(gender) %>% summarise(Express=sum(express.no.transactions),
+                                    Metro=sum(metro.no.transactions),
+                                    Superstore=sum(superstore.no.transactions),
+                                    Extrastore=sum(extra.no.transactions),
+                                    Fandf=sum(fandf.no.transactions),
+                                    Petrol=sum(petrol.no.transactions),
+                                    Direct=sum(direct.no.transactions))->plot_amt
+
+plot_mat <- matrix(0,nrow = 14,ncol = 3)
+plot_mat[,1] <- rep(c("Male","Female"),7)
+plot_mat[,2] <- c(rep(x="Express",2),rep(x="Metro",2),
+                  rep(x="Superstore",2),rep(x="Extrastore",2),
+                  rep(x="Fandf",2),rep(x="Petrol",2),rep(x="Direct",2))
+plot_mat[,3] <- rbind(plot_amt$Express,plot_amt$Metro,plot_amt$Superstore,plot_amt$Extrastore,
+                      plot_amt$Fandf,plot_amt$Petrol,plot_amt$Direct)
+plot_mat <- as.data.frame(plot_mat)
+colnames(plot_mat) <- c("Gender","Store.Type","No.Amount")
+plot_mat$No.Amount <- as.numeric(plot_mat$No.Amount)
+
+#Plot
+g1 <- 
+  ggplot(data = plot_mat)+
+  aes(x=as.factor(Gender),y=No.Amount,fill=as.factor(Store.Type))+
+  geom_col(position = 'stack')+
+  xlab("Gender")+
+  ylab("Number of Transactions")+
+  scale_fill_discrete(name="Store Type")+
+  coord_flip()
+g2 <- 
+  ggplot(data = plot_mat)+
+  aes(x=as.factor(Gender),y=No.Amount,fill=as.factor(Store.Type))+
+  geom_col(stat="identity", position="fill")+
+  xlab("Gender")+
+  ylab("Proportion")+
+  scale_fill_discrete(name="Store Type")+
+  coord_flip()
+grid.arrange(g1, g2)
+```
+
+##II. Another Method on Data Preprocessing
+
+I've first use the data with all observations to fit all three regression models, which means the NAs have not been removed. The results were similar: all three model's explaning abilities on the content_1 clicking rate were good but the models predicted each output (no matter the values of variables) to be zero, because of the seperation problem, which means that the training dataset has overwhelming amount of zeros compared to ones for content_1. I then think of deleting NA at the beginning, because after deleting the NAs, the proportion of ones will increase a little bit (but finally found out that this was not sufficient).
+
+##III. Statistical Learning Methods Used in the Project
+
+For this project, after getting these results, I've applied some learning methods which can potentially be helpful:
+1. Gradient Boosting Desicion Tree: https://www.r-bloggers.com/gradient-boosting-in-r/ 
+It was used to deal with the "rare event" problem, but I had a hard time interpreting the results and I was not sure about if the whole process was correct or not, so I didn't put it into the report.
+
+2. Neural Network: https://www.r-bloggers.com/fitting-a-neural-network-in-r-neuralnet-package/
+Depending on my understanding, neural network can handle some latent, complexe and multi-layer relations, which may be useful on identifying the company's inital assumptions on the simulations. But I think I need to spend more time learning its concepts and package to have a whole picture understanding before applying it to data.
+
+
+# References:
+
+[1]: https://turi.com/learn/gallery/notebooks/click_through_rate_prediction_intro.html
+[2]: https://www3.nd.edu/~rwilliam/stats3/rareevents.pdf
+[3]: https://www.r-bloggers.com/example-8-15-firth-logistic-regression/
+[4]: https://www.r-bloggers.com/making-sense-of-logarithmic-loss/
+[5]: https://cran.r-project.org/web/packages/brglm/brglm.pdf
