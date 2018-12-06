@@ -1,1 +1,1 @@
-# 678_Midterm_Proj
+# 678 Midterm Project
