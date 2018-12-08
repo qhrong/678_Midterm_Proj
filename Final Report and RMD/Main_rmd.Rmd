@@ -9,25 +9,7 @@ output:
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-```
-
-```{r,warning=FALSE}
-#Library
-library(MASS)
-library(dplyr)
-library(magrittr)
-library(ggplot2)
-library(cluster)
-library(gridExtra)
-library(lme4)
-library(party)
-library(arm)
-library(MLmetrics)
-library(logistf)
-library(brglm)
-library(merTools)
-library(corrplot)
-library(GGally)
+pacman::p_load("MASS","dplyr","magrittr","ggplot2","cluster","gridExtra","lme4","party","arm","MLmetrics","logistf","brglm","merTools","corrplot","GGally")
 ```
 
 ```{r}
