@@ -26,6 +26,8 @@ library(MLmetrics)
 library(logistf)
 library(brglm)
 library(merTools)
+library(corrplot)
+library(GGally)
 ```
 
 ```{r}
@@ -50,7 +52,7 @@ data_train <- data_whole[-test_index,]
 
 #A. Abstract
 
-This analysis project is conducted based on the Tesco purchase history data. The goal is to build an appropriate model to predict the advertisements' click-through-rate for each of the customers in Tesco's database. This has been done with multinomial model, logistic model and multilevel mixed effect model. A problem named "seperation problem" or "rare event problem" has arose during modeling process. Some methods have been used to tackle this problem, but their performance is not up to the expectation, which leaves a wide exploring space for future analysis on this data. 
+This analysis project is conducted based on the Tesco purchase history data. The goal is to build an appropriate model to predict the advertisements' click-through-rate for each of the customers in Tesco's database. This has been done with multinomial model, logistic model and multilevel mixed effect model. A problem named "rare event" problem or "rare event problem" has arose during modeling process. Some methods have been used to tackle this problem, but their performance is not up to the expectation, which leaves a wide exploring space for future analysis on this data. 
 
 
 #B. Introduction
@@ -81,7 +83,7 @@ Models selected to explain the content_1 variable are:
 
 -Multinomial Model: using content_1 without conversion or pre-processing, and keep its three levels(0,1,NA);
 
-For the following two models, preprocessing is necessary. I've first tried out converting NA to 0 and leave 1 as 1, so content_1 becomes "absence of click" vs. "presence of click", but this makes the "seperation" problem more severe(in appendix). Then I switched to eliminating the NA directly in both training set and testing set, in order to make "ones" in content_1 to have a higher proportion, compared to "zeros" in content_1(in main result section).
+For the following two models, preprocessing is necessary. I've first tried out converting NA to 0 and leave 1 as 1, so content_1 becomes "absence of click" vs. "presence of click", but this makes the "rare event" problem more severe(in appendix). Then I switched to eliminating the NA directly in both training set and testing set, in order to make "ones" in content_1 to have a higher proportion, compared to "zeros" in content_1(in main result section).
 -Logistic Model
 -Multilevel Mixed Effect Model
 
@@ -158,7 +160,7 @@ ggplot(data = plot_mat)+
   geom_col(position = 'stack')+
   xlab("Content 1 to 9")+
   scale_fill_discrete(name="Affluency")+
-  labs(title="Count number of clicking each content vs. Affluency",subtitle=paste(strwrap("The most clicked contents are content 7 and content1, and the rest of them don't have an evident difference on count. People from different affluency regions may have some preferences towards certain contents, but hard to make sure on it.", 90), collapse="\n"))
+  labs(title="Count number of clicking each content vs. Affluency")
 
 ```
 
@@ -217,7 +219,7 @@ ggplot(data = plot_mat)+
   geom_col(position = 'stack')+
   xlab("Content 1 to 9")+
   scale_fill_discrete(name="Gender")+
-  labs(title="Count number of clicking each content vs. Gender", subtitle=paste(strwrap("Certain contents are male dominant(5,9) but most of them are female dominant(1,2,3,7). We can expect contents have gender-featured.", 90), collapse="\n"))
+  labs(title="Count number of clicking each content vs. Gender")
 ```
 
 
@@ -253,6 +255,15 @@ ggplot(data=data_train)+
   guides(fill=guide_legend(title="Number of Clicks"))
 ```
 
+##Variables Correlation and Plot
+```{r}
+#Correlation plot for numeric variables 
+#Select out numeric variables
+M <- cor(data_train[,11:24])
+#Correlation plot
+corrplot(M,method = "color")
+```
+From the correlation plot, we can see that only the number of transactions and the total amount of spend from each type of store are correlated, and the variables intra-store type are not correlated at all (white on the plot).
 
 ##Part II: Modeling
 
@@ -302,11 +313,20 @@ predict_multinom_class <- predict(ord_logit, newdata = data_test_multinom)
 #Calculate the probability of mis-prediction
 mean(as.character(predict_multinom_class) != as.character(data_test$content_1))
 ```
+The multinomial model can be written as:
+$$log[P(click=1)/P(click=0)]=0.11+\sum\beta*x$$ 
+$$log[P(click=2)/P(click=1)]=5.24+\sum\beta*x$$
+The only difference in these two formulas is the intercepts.
 
 For this multinomial model:
-1. The residual plots for three levels look acceptable, with most of the points located between two curves.
-2. Prediction based on this model is a little bit better than random guess, about 55% of successful prediction rate. But the problem is that the model automatically take all predictions equal to 0.
 
+1. The residual plots for three levels look acceptable, with most of the points located between two curves.
+
+2. As for the coefficients, region and gender don't have a large influence on the response variable, neither numbers of transactions and total amounts, because their coefficient estimates are close to zero.
+
+3. Prediction based on this model is a little bit better than random guess, about 55% of successful prediction rate. But the problem is that the model automatically take all predictions equal to 0.
+
+I then move on to logistic model to see if the model will be more interpretable.
 
 To simplify the problem, I then narrow the response's three levels to two levels by deleting NA observations in order to increase the ones proportion compared to the zeros.
 "0" means the customers didn't clicked, "1" means the customers have clicked.
@@ -379,15 +399,16 @@ ggplot(data_test_use)+
 
 For this logistic model:
 1. Comapring the null deviance and residual deviance, we can see that the model has been improved by adding new variables.
-2. From the ANOVA test, even though the deviance is not improving drastically, as I added each variable, the deviance does decrease (but of small amount).
-3. LogLoss is a value that we want to minimize signifying that the model is more accurate. The LogLoss in this model is higher than that of multinomial model.
-4. Binned residual plot here looks normal, with all points between lines and symmetrically distributed above and below zero.
-5. The error table is telling a big problem, as the one I've observed from the multinomial model before. The model is having a really high successful prediction rate, 99.5%. Simply because that it is predicting all the test observations to be zero, because the original training dataset has only less than 0.05% which has $content_1=1$ The number of customers who have clicked through is really low. I'll deal with this in the next section "Rare event problem".
-6. The prediction plot also illustrate the last problem. We have the predicted probability not higher than 0.02, which we can approximate to a probabilitu of zero, but there are a number of points of one.
+2. About the coefficients, gender is the most influencial variable to the response variable, and the others are still not explaining it well.
+3. From the ANOVA test, even though the deviance is not improving drastically, as I added each variable, the deviance does decrease (but of small amount).
+4. LogLoss is a value that we want to minimize signifying that the model is more accurate. The LogLoss in this model is higher than that of multinomial model.
+5. Binned residual plot here looks normal, with all points between lines and symmetrically distributed above and below zero.
+6. The error table is telling a big problem, as the one I've observed from the multinomial model before. The model is having a really high successful prediction rate, 99.5%. Simply because that it is predicting all the test observations to be zero, because the original training dataset has only less than 0.05% which has $content_1=1$ The number of customers who have clicked through is really low. I'll deal with this in the next section "Rare event problem".
+7. The prediction plot also illustrate the last problem. We have the predicted probability not higher than 0.02, which we can approximate to a probabilitu of zero, but there are a number of points of one.
 
 
 To deal with logistic regression's "rare event problem":
-We only have 399 "ones" in data_train for content_1, which is relatively rare, about 1%. I'll try two most popular methods to deal with this kind of seperation problem:
+We only have 399 "ones" in data_train for content_1, which is relatively rare, about 1%. I'll try three most popular methods to deal with this kind of "Rare Event Problem":
 
 ####a. brglm: Bias Reduction in Binomial-Response Generalized Linear Models
 ```{r}
@@ -454,8 +475,25 @@ From this logitstf model:
 1. The error table has the totally opposite result compared to the logistic model, which is not normal.
 2. Prediction plot shows the same conclusion: the predicted probability higher than 0.99 but the majority of actual points are zeros.
 
-In general, these two models designed to tackle seperation problem didn't work out in this context, and I will be open to explore other solutions to this problem.
 
+####c. stan_glm: Use MCMC method to fit logistic model 
+
+Bayesian method is also mentioned while talking about "Rare Event Problem", because MCMC method is different from Maximum Likelihood Estimation process. 
+```{r}
+library(rstanarm)
+simp_logit_stan <- stan_glm(content_1~as.factor(gender)+as.factor(affluency)+log(express.total.spend+1)+log(express.no.transactions+1)+log(metro.total.spend+1)+log(metro.no.transactions+1)+log(superstore.total.spend+1)+log(superstore.no.transactions+1)+log(extra.total.spend+1)+log(extra.no.transactions+1)+log(fandf.total.spend+1)+log(fandf.no.transactions+1)+log(petrol.total.spend+1)+log(petrol.no.transactions+1)+log(direct.total.spend+1)+log(direct.no.transactions+1),
+                            data=data_train_nona,
+                            family = binomial(link = "logit"),
+                            iter=1000,chains=2,
+                            prior = )
+
+print(simp_logit_stan)
+pp_check(simp_logit_stan,plotfun = "intervals")
+```
+Limited to computational capability, I've set number of chains to 2 and number of iterations to 1000. 
+Based on ppcheck plot, which is similar to the prediction plot, the problem still take place, because model's return values are all located at zero while we have some data scatters at one. 
+
+In general, these three models designed to tackle rare data problem didn't work out in this context, and I will be open to explore other solutions to this problem.
 
 ###iii. Multilevel Mixed Effect Model for Contents
 
@@ -507,17 +545,76 @@ error_table
 ```
 
 From this multilevel mixed effect model:
-1. The affluency as a random effect doesn't have a high influence on the model, with its random effect coefficients really close to zero. While the gender effect relatively has a large difference.
+1. The affluency as a random effect doesn't have a high influence on the model, with its coefficients really close to zero. While the gender effect relatively has a large difference. So I don't think that adding levels to the model help me explain more about the response variable.
 2. Binned residual plot of this model looks normal.
-3. The predictions made on test set and the error table seem that it's still suffering the same problem left before, known as "seperation" problem. The three models (multinomial,logistic and multilevel) are showing exactly same results in error table and predictions.
+3. The predictions made on test set and the error table seem that it's still suffering the same problem left before, known as "rare event" problem. The three models (multinomial,logistic and multilevel) are showing exactly same results in error table and predictions.
+
+
+###iv. Models After Modifying Proportions Of 0s and 1s
+
+Modifying the content_1 to 50% of ones and 50% of zeros, which may produce a more "real" prediction accuracy rate, but this data processing will lose the proportions' information and I'm not sure if it will make sense because one of the most important messages conveyed from the data is the proportion of ones in content clicking choice. 
+
+```{r}
+#Length of ones in content_1
+length_ones <- nrow(subset(data_train_nona,data_train_nona$content_1==1))
+#I'll random pick 399 zeros observations from the data
+set.seed(2018)
+data_train_fifty <- data_train_nona[sort(sample(1:nrow(data_train_nona),length_ones)),]
+data_train_fifty <- rbind(data_train_fifty,subset(data_train_nona,data_train_nona$content_1==1))
+```  
+
+```{r}
+simp_logit_fifty <- glm(content_1~as.factor(gender)+as.factor(affluency)+log(express.total.spend+1)+log(express.no.transactions+1)+log(metro.total.spend+1)+log(metro.no.transactions+1)+log(superstore.total.spend+1)+log(superstore.no.transactions+1)+log(extra.total.spend+1)+log(extra.no.transactions+1)+log(fandf.total.spend+1)+log(fandf.no.transactions+1)+log(petrol.total.spend+1)+log(petrol.no.transactions+1)+log(direct.total.spend+1)+log(direct.no.transactions+1),data=data_train_fifty,family = binomial)
+summary(simp_logit_fifty)
+
+#Binned residual plot
+binnedplot(x=simp_logit_fifty$fitted.values,y=resid(simp_logit_fifty,type="response"),nclass = 30)
+
+#Added variable plot
+anova(simp_logit_fifty)
+
+#Model assumptions check 
+plot(simp_logit_fifty)
+
+#Error table
+T_A <- mean(simp_logit_fifty$fitted.values<0.5 & data_train_fifty$content_1==0)
+T_B <- mean(simp_logit_fifty$fitted.values>0.5 & data_train_fifty$content_1==0)
+T_C <- mean(simp_logit_fifty$fitted.values<0.5 & data_train_fifty$content_1==1)
+T_D <- mean(simp_logit_fifty$fitted.values>0.5 & data_train_fifty$content_1==1)
+error_table <- matrix(c(T_A,T_B,T_C,T_D),byrow=TRUE,nrow = 2) 
+rownames(error_table) <- c("y=0","y=1")
+colnames(error_table) <- c("y_hat=0","y_hat=1")
+error_table
+
+#Predictions
+#In prediction, I'll still use the whole test set without  manipulating the proportions of zeros and ones on the test data. 
+data_test[,-c(1:10,28,29)] %>% filter(is.na(data_test$content_1)==FALSE)-> data_test_glm
+predict_glm_class <- predict(simp_logit_fifty, newdata = data_test_glm)
+probs_glm <- exp(predict_glm_class)/(1+exp(predict_glm_class)) #probability of 1
+data_test_use <- data_test %>% filter(is.na(data_test$content_1)==FALSE)
+ggplot(data_test_use)+
+  aes(x=probs_glm,y=as.factor(data_test_use$content_1))+
+  geom_point()+
+  xlab("Predicted Probability")+ylab("Actual Value")+
+  geom_vline(xintercept=0.5,color="red")
+
+```
+
+From this logistic model:
+1. We're not confident that the variables put in the model are explaining the response variable well, which may decrease the prediction accuracy; 
+2. The anova test results tell us that adding some variables (such as superstore.no.transactions, extra.no.transactions, etc) didn't improve the model's explainability a lot;
+3. From model assumption check plots, the model's residuals are not normal distributed(points are far from located on the line); the residuals aren't spread equally along the ranges of predictors(a weird cross on the plot); and no influencial cases in this case;
+4. The binned residual plot proves the absence of heteroscedasticity;
+5. With modified data, the error table returns a "normal" result, 63% accuracy rate in train data. And the prediction plot's x-axis, prediction values, now has a range from 0 to 1 (compared to 0 to 0.1 before), and it means that the data modification solves the problem suffered before;
+6. This result also prove on the one side, the data will cause "rare event" problem to the models, even though this model result (after modifying data's proportion) is limited in usage; On the other side, the fact that previous models don't explain the response variable well is not largely due to the "rare event" problem, it's due to the variables' selection problem.
 
 
 #E. Discussion
 
 ##i. Implitcation
 
-1. From all the results and the interpretations of the models fitted above, it's not reseasonable to use these models to predict clicking rate; while the models do explain the clicking rate to some extend.
-2. I've also thought of sampling a data of 50% zeros in content_1 and 50% ones in content_1, but this data modification will lose the proportion's information and it doesn't make sense because one of the most important messages conveyed from the data is the proportion of ones in content clicking choice.
+From all the results and the interpretations of the models fitted above, it's not reasonable to use these models to predict clicking rate; while the models do explain the clicking rate to some extend.
+
 
 ##ii. Limitation
 
@@ -526,7 +623,7 @@ From this multilevel mixed effect model:
 
 ##iii. Future Directions
 
-1. I may continue on looking for other methods which could resolve the seperation problem in this dataset.
+1. I may continue on looking for other methods which could resolve the rare event problem in this dataset.
 2. The data's structure or other latent relations may violate the assumptions of regressions I'm applying in the project. Therefore, some other more advanced learning methods may be more appropriate for this data's predicting problem.
 3. After finding a more proper and efficient way to make predictions, I will continue on predicting content_2 to content_9. 
 
@@ -720,7 +817,7 @@ grid.arrange(g1, g2)
 
 ##II. Another Method on Data Preprocessing
 
-I've first use the data with all observations to fit all three regression models, which means the NAs have not been removed. The results were similar: all three model's explaning abilities on the content_1 clicking rate were good but the models predicted each output (no matter the values of variables) to be zero, because of the seperation problem, which means that the training dataset has overwhelming amount of zeros compared to ones for content_1. I then think of deleting NA at the beginning, because after deleting the NAs, the proportion of ones will increase a little bit (but finally found out that this was not sufficient).
+I've first use the data with all observations to fit all three regression models, which means the NAs have not been removed. The results were similar: all three model's explaning abilities on the content_1 clicking rate were good but the models predicted each output (no matter the values of variables) to be zero, because of the rare event problem, which means that the training dataset has overwhelming amount of zeros compared to ones for content_1. I then think of deleting NA at the beginning, because after deleting the NAs, the proportion of ones will increase a little bit (but finally found out that this was not sufficient).
 
 ##III. Statistical Learning Methods Used in the Project
 
@@ -729,7 +826,7 @@ For this project, after getting these results, I've applied some learning method
 It was used to deal with the "rare event" problem, but I had a hard time interpreting the results and I was not sure about if the whole process was correct or not, so I didn't put it into the report.
 
 2. Neural Network: https://www.r-bloggers.com/fitting-a-neural-network-in-r-neuralnet-package/
-Depending on my understanding, neural network can handle some latent, complexe and multi-layer relations, which may be useful on identifying the company's inital assumptions on the simulations. But I think I need to spend more time learning its concepts and package to have a whole picture understanding before applying it to data.
+Depending on my understanding, neural network can handle some latent, complexe and multi-layer relations, which may be useful on identig the company's inital assumptions on the simulations. But I think I need to spend more time learning its concepts and package to have a whole picture understanding before applying it to data.
 
 
 # References:
@@ -739,3 +836,4 @@ Depending on my understanding, neural network can handle some latent, complexe a
 [3]: https://www.r-bloggers.com/example-8-15-firth-logistic-regression/
 [4]: https://www.r-bloggers.com/making-sense-of-logarithmic-loss/
 [5]: https://cran.r-project.org/web/packages/brglm/brglm.pdf
+[6]: https://stats.stackexchange.com/questions/354084/modelling-rare-events-with-small-sample-size
